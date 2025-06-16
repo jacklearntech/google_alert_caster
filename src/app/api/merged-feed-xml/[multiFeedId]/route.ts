@@ -88,16 +88,26 @@ export async function GET(
       mergedFeedContentForUser = "<?xml version='1.0' encoding='UTF-8'?><feed xmlns='http://www.w3.org/2005/Atom'><title>Empty Feed</title></feed>";
     }
 
-    // Clean up Google redirect links in the mergedFeedContentForUser
+    // Clean up Google redirect links and tracking parameters in the mergedFeedContentForUser
     const googleRedirectPrefixWithAmp = 'https://www.google.com/url?rct=j&amp;sa=t&amp;url=';
     
     mergedFeedContentForUser = mergedFeedContentForUser.replace(
-        new RegExp(
-            `(<link[^>]*?href=")${googleRedirectPrefixWithAmp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^"]*)(")`
-            , 'g'
-        ),
-        (match, g1OpeningTagAndHref, restOfUrl, g3ClosingQuote) => {
-            return `${g1OpeningTagAndHref}${restOfUrl}${g3ClosingQuote}`;
+        /(<link[^>]*?href=")([^"]*)(")/g,
+        (match, g1OpeningTagAndHref, hrefValue, g3ClosingQuote) => {
+            let newHrefValue = hrefValue;
+
+            // Step 1: Remove Google redirect prefix if present
+            if (newHrefValue.startsWith(googleRedirectPrefixWithAmp)) {
+              newHrefValue = newHrefValue.substring(googleRedirectPrefixWithAmp.length);
+            }
+    
+            // Step 2: Remove tracking suffix if present
+            const suffixMatchIndex = newHrefValue.indexOf('&amp;ct=ga&amp;cd');
+            if (suffixMatchIndex !== -1) {
+              newHrefValue = newHrefValue.substring(0, suffixMatchIndex);
+            }
+            
+            return `${g1OpeningTagAndHref}${newHrefValue}${g3ClosingQuote}`;
         }
     );
 

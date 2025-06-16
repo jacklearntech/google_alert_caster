@@ -78,23 +78,27 @@ export async function processRssFeed(
       mergedFeedContentForUser = ""; // No feeds provided
     }
 
-    // Clean up Google redirect links in the mergedFeedContentForUser (for display/download)
-    // Targets href attributes of <link> tags.
-    const googleRedirectPrefixToReplace = 'https://www.google.com/url?rct=j&sa=t&url=';
+    // Clean up Google redirect links and tracking parameters in the mergedFeedContentForUser
+    const googleRedirectPrefixXML = 'https://www.google.com/url?rct=j&amp;sa=t&amp;url=';
+    const trackingSuffixPattern = /&amp;ct=ga&amp;cd[\s\S]*/;
     
     mergedFeedContentForUser = mergedFeedContentForUser.replace(
-      // Regex to capture:
-      // g1: Start of the link tag up to href=" (e.g., <link rel="alternate" href=")
-      // g2: The content of the href attribute (the URL)
-      // g3: The closing quote of the href attribute (")
       /(<link[^>]*?href=")([^"]*)(")/g,
-      (match, g1, g2, g3) => {
-        const hrefValue = g2; // g2 is the URL itself
-        if (hrefValue.startsWith(googleRedirectPrefixToReplace)) {
-          const newHrefValue = hrefValue.substring(googleRedirectPrefixToReplace.length);
-          return `${g1}${newHrefValue}${g3}`; // Reconstruct with the modified href value
+      (match, g1OpeningTagAndHref, hrefValue, g3ClosingQuote) => {
+        let newHrefValue = hrefValue;
+
+        // Step 1: Remove Google redirect prefix if present
+        if (newHrefValue.startsWith(googleRedirectPrefixXML)) {
+          newHrefValue = newHrefValue.substring(googleRedirectPrefixXML.length);
         }
-        return match; // No change if prefix not found
+
+        // Step 2: Remove tracking suffix if present
+        const suffixMatchIndex = newHrefValue.indexOf('&amp;ct=ga&amp;cd');
+        if (suffixMatchIndex !== -1) {
+          newHrefValue = newHrefValue.substring(0, suffixMatchIndex);
+        }
+        
+        return `${g1OpeningTagAndHref}${newHrefValue}${g3ClosingQuote}`;
       }
     );
 
