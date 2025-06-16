@@ -2,6 +2,7 @@
 "use server";
 
 import { summarizeRssFeed, type SummarizeRssFeedInput } from '@/ai/flows/summarize-rss-feed';
+import { analyzeArticleSentiment, type ArticleSentimentInput } from '@/ai/flows/analyze-article-sentiment';
 
 export interface ProcessRssFeedResult {
   mergedFeedContent: string;
@@ -12,7 +13,6 @@ export interface ProcessRssFeedResult {
 
 function getHostname(url: string): string {
   try {
-    // Decode XML entities like &amp; before parsing with new URL()
     const decodedUrl = url.replace(/&amp;/g, '&')
                           .replace(/&lt;/g, '<')
                           .replace(/&gt;/g, '>')
@@ -21,7 +21,6 @@ function getHostname(url: string): string {
     const parsedUrl = new URL(decodedUrl);
     return parsedUrl.hostname;
   } catch (e) {
-    // Fallback for potentially malformed URLs after cleaning
     const domainMatch = url.match(/^(?:https?:\/\/)?(?:[^@\n]+@)?(?:www\.)?([^:\/\n?]+)/im);
     if (domainMatch && domainMatch[1]) {
         return domainMatch[1];
@@ -30,6 +29,117 @@ function getHostname(url: string): string {
   }
 }
 
+function stripHtmlAndDecode(html: string): string {
+  if (!html) return '';
+  let text = html;
+  // Basic HTML entity decoding
+  text = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
+  // Strip HTML tags
+  text = text.replace(/<[^>]*>?/gm, '');
+  // Remove multiple newlines and spaces
+  text = text.replace(/\s+/g, ' ').trim();
+  return text;
+}
+
+
+async function postProcessUserFeedXml(xmlString: string): Promise<string> {
+  let processedXml = xmlString;
+  const googleRedirectPrefixXML = 'https://www.google.com/url?rct=j&amp;sa=t&amp;url=';
+
+  // Process entries for sentiment and sourcename
+  const entryRegex = /<entry>[\s\S]*?<\/entry>/g;
+  const entries = [];
+  let match;
+  while ((match = entryRegex.exec(processedXml)) !== null) {
+    let entryXml = match[0];
+
+    // 1. Sentiment Analysis
+    const titleMatch = entryXml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const articleTitle = titleMatch ? stripHtmlAndDecode(titleMatch[1]) : 'No title';
+
+    let articleContent = 'No content';
+    const contentTagMatch = entryXml.match(/<content[^>]*>([\s\S]*?)<\/content>/i);
+    if (contentTagMatch && contentTagMatch[1]) {
+        articleContent = stripHtmlAndDecode(contentTagMatch[1]);
+    } else {
+        const summaryMatch = entryXml.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i);
+        if (summaryMatch && summaryMatch[1]) {
+            articleContent = stripHtmlAndDecode(summaryMatch[1]);
+        }
+    }
+    
+    try {
+        const sentimentResult = await analyzeArticleSentiment({ title: articleTitle, content: articleContent });
+        const sentimentTag = `<sentiment>${sentimentResult.sentiment}</sentiment>`;
+        
+        const updatedTagMatch = /<\/updated>/i;
+        if (updatedTagMatch.test(entryXml)) {
+            entryXml = entryXml.replace(updatedTagMatch, `$&${sentimentTag}`);
+        } else {
+             const idTagMatch = /<\/id>/i;
+             if (idTagMatch.test(entryXml)) {
+                entryXml = entryXml.replace(idTagMatch, `$&${sentimentTag}`);
+             } else {
+                entryXml = entryXml.replace(/(<\/entry>)/i, `${sentimentTag}$1`);
+             }
+        }
+    } catch (e) {
+        console.warn(`Sentiment analysis failed for article: ${articleTitle}`, e);
+        // Optionally add a default or error sentiment tag
+        // const sentimentTag = `<sentiment>unknown</sentiment>`;
+        // entryXml = entryXml.replace(/(<\/updated>)/i, `$&${sentimentTag}`);
+    }
+
+
+    // 2. Add <sourcename>
+    const linkTagRegex = /<link[^>]*?href="([^"]*)"[^>]*?\/>/;
+    const linkMatch = entryXml.match(linkTagRegex);
+    if (linkMatch && linkMatch[1]) {
+        let hrefValue = linkMatch[1];
+        let tempCleanedHref = hrefValue;
+        if (tempCleanedHref.startsWith(googleRedirectPrefixXML)) {
+            tempCleanedHref = tempCleanedHref.substring(googleRedirectPrefixXML.length);
+        }
+        const suffixMatchIndex = tempCleanedHref.indexOf('&amp;ct=ga&amp;cd');
+        if (suffixMatchIndex !== -1) {
+            tempCleanedHref = tempCleanedHref.substring(0, suffixMatchIndex);
+        }
+        const hostname = getHostname(tempCleanedHref);
+        const sourceNameTag = `<sourcename>${hostname}</sourcename>`;
+        if (linkMatch[0]) {
+             entryXml = entryXml.replace(linkMatch[0], linkMatch[0] + sourceNameTag);
+        }
+    }
+    entries.push(entryXml);
+  }
+
+  // Reconstruct XML if entries were modified
+  if (entries.length > 0) {
+    let currentEntryIndex = 0;
+    processedXml = processedXml.replace(entryRegex, () => entries[currentEntryIndex++]);
+  }
+
+
+  // 3. Clean up Google redirect links and tracking parameters in HREFs
+  processedXml = processedXml.replace(
+    /(<link[^>]*?href=")([^"]*)(")/g,
+    (matchHref, g1OpeningTagAndHref, hrefValue, g3ClosingQuote) => {
+      let newHrefValue = hrefValue;
+      if (newHrefValue.startsWith(googleRedirectPrefixXML)) {
+        newHrefValue = newHrefValue.substring(googleRedirectPrefixXML.length);
+      }
+      const suffixMatchIndex = newHrefValue.indexOf('&amp;ct=ga&amp;cd');
+      if (suffixMatchIndex !== -1) {
+        newHrefValue = newHrefValue.substring(0, suffixMatchIndex);
+      }
+      return `${g1OpeningTagAndHref}${newHrefValue}${g3ClosingQuote}`;
+    }
+  );
+
+  return processedXml;
+}
+
+
 export async function processRssFeed(
   feedUrls: string | string[],
   previousFeedContent?: string
@@ -37,17 +147,13 @@ export async function processRssFeed(
   const urlsArray = Array.isArray(feedUrls) ? feedUrls : [feedUrls];
   const isSingleFeed = urlsArray.length === 1;
 
-  const googleRedirectPrefixXML = 'https://www.google.com/url?rct=j&amp;sa=t&amp;url=';
-
   try {
     const fetchPromises = urlsArray.map(url =>
       fetch(url, { cache: 'no-store' })
         .then(async response => {
           if (!response.ok) {
             let errorBody = '';
-            try {
-              errorBody = await response.text();
-            } catch (parseError) { /* Ignore */ }
+            try { errorBody = await response.text(); } catch (parseError) { /* Ignore */ }
             const errorMessage = errorBody ? errorBody.substring(0, 200) : response.statusText;
             throw new Error(`Failed to fetch ${url}: ${response.status} ${errorMessage}`);
           }
@@ -58,11 +164,9 @@ export async function processRssFeed(
     const allFeedContents = await Promise.all(fetchPromises);
 
     let mergedFeedContentForUser: string;
-
     if (allFeedContents.length > 1) {
       let baseXml = allFeedContents[0];
       const entriesToMerge: string[] = [];
-
       for (let i = 1; i < allFeedContents.length; i++) {
         const subsequentFeedContent = allFeedContents[i];
         const entryRegex = /<entry>[\s\S]*?<\/entry>/g; 
@@ -71,11 +175,9 @@ export async function processRssFeed(
           entriesToMerge.push(match[0]);
         }
       }
-
       if (entriesToMerge.length > 0) {
         const feedCloseTagRegex = /<\/feed\s*>/i;
         const match = feedCloseTagRegex.exec(baseXml);
-
         if (match) {
           const feedCloseTagIndex = match.index;
           mergedFeedContentForUser =
@@ -94,66 +196,20 @@ export async function processRssFeed(
     } else if (allFeedContents.length === 1) {
       mergedFeedContentForUser = allFeedContents[0];
     } else {
-      mergedFeedContentForUser = ""; 
+      mergedFeedContentForUser = "<?xml version='1.0' encoding='UTF-8'?><feed xmlns='http://www.w3.org/2005/Atom'><title>Empty Feed</title></feed>"; 
     }
 
-    // Step 1: Add <sourcename> to each entry
-    mergedFeedContentForUser = mergedFeedContentForUser.replace(/<entry>[\s\S]*?<\/entry>/g, (entryMatch) => {
-      let modifiedEntry = entryMatch;
-      const linkTagRegex = /<link[^>]*?href="([^"]*)"[^>]*?\/>/;
-      const linkMatch = modifiedEntry.match(linkTagRegex);
-
-      if (linkMatch && linkMatch[1]) {
-          let hrefValue = linkMatch[1]; 
-
-          // Clean hrefValue temporarily for hostname extraction
-          let tempCleanedHref = hrefValue;
-          if (tempCleanedHref.startsWith(googleRedirectPrefixXML)) {
-              tempCleanedHref = tempCleanedHref.substring(googleRedirectPrefixXML.length);
-          }
-          const suffixMatchIndex = tempCleanedHref.indexOf('&amp;ct=ga&amp;cd');
-          if (suffixMatchIndex !== -1) {
-              tempCleanedHref = tempCleanedHref.substring(0, suffixMatchIndex);
-          }
-
-          const hostname = getHostname(tempCleanedHref);
-          const sourceNameTag = `<sourcename>${hostname}</sourcename>`;
-          
-          // Insert sourcenameTag after the full matched link tag linkMatch[0]
-          modifiedEntry = modifiedEntry.replace(linkMatch[0], linkMatch[0] + sourceNameTag);
-      }
-      return modifiedEntry;
-    });
+    // Post-process the merged XML for user display (sentiment, sourcename, link cleaning)
+    mergedFeedContentForUser = await postProcessUserFeedXml(mergedFeedContentForUser);
     
-    // Step 2: Clean up Google redirect links and tracking parameters in the mergedFeedContentForUser HREFs
-    mergedFeedContentForUser = mergedFeedContentForUser.replace(
-      /(<link[^>]*?href=")([^"]*)(")/g,
-      (match, g1OpeningTagAndHref, hrefValue, g3ClosingQuote) => {
-        let newHrefValue = hrefValue;
-
-        if (newHrefValue.startsWith(googleRedirectPrefixXML)) {
-          newHrefValue = newHrefValue.substring(googleRedirectPrefixXML.length);
-        }
-
-        const suffixMatchIndex = newHrefValue.indexOf('&amp;ct=ga&amp;cd');
-        if (suffixMatchIndex !== -1) {
-          newHrefValue = newHrefValue.substring(0, suffixMatchIndex);
-        }
-        
-        return `${g1OpeningTagAndHref}${newHrefValue}${g3ClosingQuote}`;
-      }
-    );
-
+    // AI summarization still uses the raw concatenated content
     const feedContentForAI = allFeedContents.join("\n\n");
-
     const aiInput: SummarizeRssFeedInput = {
       currentFeed: feedContentForAI,
     };
-
     if (isSingleFeed && previousFeedContent) {
       aiInput.previousFeed = previousFeedContent;
     }
-
     const aiResult = await summarizeRssFeed(aiInput);
 
     return {
