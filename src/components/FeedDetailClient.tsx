@@ -7,7 +7,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import type { FeedCacheData } from '@/types';
-import { Loader2, RefreshCw, Download, AlertTriangle, FileText, Info, Clock, ExternalLink, List } from 'lucide-react';
+import { Loader2, RefreshCw, Download, AlertTriangle, FileText, Info, Clock, ExternalLink, List, Sparkles } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
 import { cn } from "@/lib/utils";
@@ -15,7 +15,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 
 
 interface FeedDetailClientProps {
-  feedId: string; // This can be a single encoded URL or multiple, separated by MULTI_FEED_SEPARATOR
+  feedId: string; // This can be a single encoded URL or multiple, where '|' in separator might be encoded
 }
 
 const FEED_CACHE_PREFIX = 'rss_cache_';
@@ -32,9 +32,11 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
 
   useEffect(() => {
     if (feedId) {
-      const urls = feedId.includes(MULTI_FEED_SEPARATOR)
-        ? feedId.split(MULTI_FEED_SEPARATOR).map(url => decodeURIComponent(url))
-        : [decodeURIComponent(feedId)];
+      const fullyDecodedFeedId = decodeURIComponent(feedId); // Decode the whole feedId first
+
+      const urls = fullyDecodedFeedId.includes(MULTI_FEED_SEPARATOR)
+        ? fullyDecodedFeedId.split(MULTI_FEED_SEPARATOR) // Parts are already decoded
+        : [fullyDecodedFeedId]; // Part is already decoded
       setDecodedUrls(urls);
       setIsMultiFeed(urls.length > 1);
     }
@@ -42,7 +44,6 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
 
   const getCacheKey = useCallback(() => {
     if (decodedUrls.length === 0) return null;
-    // For multi-feeds, create a stable key from sorted URLs to ensure cache consistency
     const keyContent = isMultiFeed ? [...decodedUrls].sort().join(',') : decodedUrls[0];
     return `${FEED_CACHE_PREFIX}${encodeURIComponent(keyContent)}`;
   }, [decodedUrls, isMultiFeed]);
@@ -81,11 +82,11 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
     }
 
     try {
-      const previousRssContent = isMultiFeed ? undefined : feedData?.rawRss; // Only use previous for single feeds
+      const previousRssContent = isMultiFeed ? undefined : feedData?.rawRss;
       const result = await processRssFeed(isMultiFeed ? decodedUrls : decodedUrls[0], previousRssContent);
       
       const newFeedCacheData: FeedCacheData = {
-        rawRss: result.mergedFeedContent, // This is now merged content if multiple
+        rawRss: result.mergedFeedContent,
         summary: result.summary,
         timestamp: result.timestamp,
         originalUrls: result.originalUrls,
@@ -111,7 +112,7 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
       setIsLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [decodedUrls, getCacheKey, toast, isMultiFeed]); // feedData removed to avoid re-running excessively with stale previous content on multi-feed
+  }, [decodedUrls, getCacheKey, toast, isMultiFeed]);
 
   useEffect(() => {
     if (decodedUrls.length > 0) {
@@ -230,9 +231,9 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
             <Download className="mr-2 h-4 w-4" />
             Download {isMultiFeed ? "Merged XML Source" : "Cached XML"}
           </Button>
-          {!isMultiFeed && ( // Only show "View Raw XML" for single feeds
+          {!isMultiFeed && ( 
             <Link
-              href={`/api/feed-xml/${feedId}`} // feedId here is the single encoded URL
+              href={`/api/feed-xml/${feedId}`} 
               target="_blank"
               rel="noopener noreferrer"
               className={cn(
@@ -260,7 +261,7 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle className="font-headline flex items-center">
-             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2 h-6 w-6 text-primary"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
+            <Sparkles className="mr-2 h-6 w-6 text-primary" />
             AI Summary
           </CardTitle>
           <CardDescription className="font-body">
