@@ -135,6 +135,9 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
         fileNamePart = 'merged_feeds';
     } else if (feedData.originalUrls && feedData.originalUrls.length > 0 && typeof feedData.originalUrls[0] === 'string' && feedData.originalUrls[0].trim() !== '') {
         fileNamePart = feedData.originalUrls[0].substring(feedData.originalUrls[0].lastIndexOf('/') + 1) || 'feed';
+        // Ensure it doesn't try to create a super long file name from a full URL
+        if (fileNamePart.length > 50) fileNamePart = fileNamePart.substring(0,50);
+
     }
 
     const safeFileName = fileNamePart.replace(/[^a-z0-9_.-]/gi, '_').toLowerCase();
@@ -244,22 +247,24 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
             <Download className="mr-2 h-4 w-4" />
             Download {isMultiFeed ? "Merged XML Source" : "Cached XML"}
           </Button>
-          {isMultiFeed && (
-            <Link
-              href={`/api/merged-feed-xml/${feedId}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={cn(
-                buttonVariants({ variant: "outline" }),
-                "w-full sm:w-auto",
-                (!feedData.rawRss || isLoading) && "opacity-50 cursor-not-allowed pointer-events-none"
-              )}
-              aria-disabled={!feedData.rawRss || isLoading}
-            >
-              <ExternalLink className="mr-2 h-4 w-4" />
-              View Merged XML
-            </Link>
-          )}
+          
+          {/* Link to view processed/merged XML - always available, points to merged-feed-xml API endpoint */}
+          <Link
+            href={`/api/merged-feed-xml/${feedId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(
+              buttonVariants({ variant: "outline" }),
+              "w-full sm:w-auto",
+              (!feedData.rawRss || isLoading) && "opacity-50 cursor-not-allowed pointer-events-none"
+            )}
+            aria-disabled={!feedData.rawRss || isLoading}
+          >
+            <ExternalLink className="mr-2 h-4 w-4" />
+            {isMultiFeed ? "View Merged XML" : "View Processed XML"}
+          </Link>
+
+          {/* Link to view raw XML - only for single feeds, points to feed-xml API endpoint */}
           {!isMultiFeed && ( 
             <Link
               href={`/api/feed-xml/${feedId}`} 
