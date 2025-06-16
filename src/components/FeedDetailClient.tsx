@@ -1,13 +1,16 @@
+
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
 import { processRssFeed, type ProcessRssFeedResult } from '@/app/actions';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import type { FeedCacheData } from '@/types';
-import { Loader2, RefreshCw, Download, AlertTriangle, FileText, Info, Clock } from 'lucide-react';
+import { Loader2, RefreshCw, Download, AlertTriangle, FileText, Info, Clock, ExternalLink } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import Link from 'next/link';
+import { cn } from "@/lib/utils";
 
 interface FeedDetailClientProps {
   feedId: string; // This is the encoded URL
@@ -95,7 +98,7 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
   };
 
   const handleDownloadXml = () => {
-    if (!feedData) return;
+    if (!feedData?.rawRss) return;
     const blob = new Blob([feedData.rawRss], { type: 'application/xml;charset=utf-8' });
     const link = document.createElement('a');
     const urlFileName = feedData.originalUrl.substring(feedData.originalUrl.lastIndexOf('/') + 1) || 'feed';
@@ -140,9 +143,6 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
     );
   }
   
-  // If feedData is null after trying (e.g. initial error and no cache), something is wrong.
-  // This state should ideally be covered by the error block above if it was an initial load error.
-  // If it's null for other reasons, show a simpler message.
   if (!feedData) {
      return (
         <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
@@ -173,20 +173,33 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
             </CardDescription>
           )}
         </CardHeader>
-        <CardContent className="space-y-2">
-           <Button onClick={handleRefresh} variant="outline" className="mr-2" disabled={isLoading}>
+        <CardContent className="space-y-2 sm:space-y-0 sm:space-x-2 flex flex-wrap items-center">
+           <Button onClick={handleRefresh} variant="outline" disabled={isLoading} className="mb-2 sm:mb-0">
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {!isLoading && <RefreshCw className="mr-2 h-4 w-4" />}
             Refresh
           </Button>
-          <Button onClick={handleDownloadXml} variant="outline" disabled={!feedData.rawRss}>
+          <Button onClick={handleDownloadXml} variant="outline" disabled={!feedData.rawRss} className="mb-2 sm:mb-0">
             <Download className="mr-2 h-4 w-4" />
             Download Cached XML
           </Button>
+          <Link
+            href={`/api/feed-xml/${feedId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(
+              buttonVariants({ variant: "outline" }),
+              (!feedData.rawRss || isLoading) && "opacity-50 cursor-not-allowed pointer-events-none"
+            )}
+            aria-disabled={!feedData.rawRss || isLoading}
+          >
+            <ExternalLink className="mr-2 h-4 w-4" />
+            View Raw XML
+          </Link>
         </CardContent>
       </Card>
 
-      {error && ( // Display non-critical errors (e.g. refresh failed but old data shown)
+      {error && ( 
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Refresh Error</AlertTitle>
@@ -252,4 +265,3 @@ const AlertDescription: React.FC<{children: React.ReactNode}> = ({children}) => 
 const ScrollArea: React.FC<{className?: string, children: React.ReactNode}> = ({className, children}) => {
   return <div className={`relative overflow-auto ${className}`}>{children}</div>
 }
-
