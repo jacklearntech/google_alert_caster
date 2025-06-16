@@ -10,12 +10,34 @@ export interface ProcessRssFeedResult {
   originalUrls: string[];
 }
 
+function getHostname(url: string): string {
+  try {
+    // Decode XML entities like &amp; before parsing with new URL()
+    const decodedUrl = url.replace(/&amp;/g, '&')
+                          .replace(/&lt;/g, '<')
+                          .replace(/&gt;/g, '>')
+                          .replace(/&quot;/g, '"')
+                          .replace(/&apos;/g, "'");
+    const parsedUrl = new URL(decodedUrl);
+    return parsedUrl.hostname;
+  } catch (e) {
+    // Fallback for potentially malformed URLs after cleaning
+    const domainMatch = url.match(/^(?:https?:\/\/)?(?:[^@\n]+@)?(?:www\.)?([^:\/\n?]+)/im);
+    if (domainMatch && domainMatch[1]) {
+        return domainMatch[1];
+    }
+    return 'unknown';
+  }
+}
+
 export async function processRssFeed(
   feedUrls: string | string[],
   previousFeedContent?: string
 ): Promise<ProcessRssFeedResult> {
   const urlsArray = Array.isArray(feedUrls) ? feedUrls : [feedUrls];
   const isSingleFeed = urlsArray.length === 1;
+
+  const googleRedirectPrefixXML = 'https://www.google.com/url?rct=j&amp;sa=t&amp;url=';
 
   try {
     const fetchPromises = urlsArray.map(url =>
@@ -41,10 +63,9 @@ export async function processRssFeed(
       let baseXml = allFeedContents[0];
       const entriesToMerge: string[] = [];
 
-      // Extract <entry>...</entry> blocks from subsequent feeds
       for (let i = 1; i < allFeedContents.length; i++) {
         const subsequentFeedContent = allFeedContents[i];
-        const entryRegex = /<entry>[\s\S]*?<\/entry>/g; // Use non-greedy match
+        const entryRegex = /<entry>[\s\S]*?<\/entry>/g; 
         let match;
         while ((match = entryRegex.exec(subsequentFeedContent)) !== null) {
           entriesToMerge.push(match[0]);
@@ -52,7 +73,6 @@ export async function processRssFeed(
       }
 
       if (entriesToMerge.length > 0) {
-        // Find the closing </feed> tag in the base XML
         const feedCloseTagRegex = /<\/feed\s*>/i;
         const match = feedCloseTagRegex.exec(baseXml);
 
@@ -60,39 +80,61 @@ export async function processRssFeed(
           const feedCloseTagIndex = match.index;
           mergedFeedContentForUser =
             baseXml.substring(0, feedCloseTagIndex) +
-            '\n' + // Add a newline for separation
-            entriesToMerge.join('\n') + // Join new entries with newlines
-            '\n' + // Add a newline before the closing tag
+            '\n' + 
+            entriesToMerge.join('\n') + 
+            '\n' + 
             baseXml.substring(feedCloseTagIndex);
         } else {
-          // Fallback if </feed> tag is not found (shouldn't happen with valid Atom feeds)
           console.warn("Could not find closing </feed> tag in base XML for merging. Appending entries as a fallback.");
           mergedFeedContentForUser = baseXml + '\n' + entriesToMerge.join('\n');
         }
       } else {
-        mergedFeedContentForUser = baseXml; // Only one feed's content, or others had no entries
+        mergedFeedContentForUser = baseXml;
       }
     } else if (allFeedContents.length === 1) {
       mergedFeedContentForUser = allFeedContents[0];
     } else {
-      mergedFeedContentForUser = ""; // No feeds provided
+      mergedFeedContentForUser = ""; 
     }
 
-    // Clean up Google redirect links and tracking parameters in the mergedFeedContentForUser
-    const googleRedirectPrefixXML = 'https://www.google.com/url?rct=j&amp;sa=t&amp;url=';
-    const trackingSuffixPattern = /&amp;ct=ga&amp;cd[\s\S]*/;
+    // Step 1: Add <sourcename> to each entry
+    mergedFeedContentForUser = mergedFeedContentForUser.replace(/<entry>[\s\S]*?<\/entry>/g, (entryMatch) => {
+      let modifiedEntry = entryMatch;
+      const linkTagRegex = /<link[^>]*?href="([^"]*)"[^>]*?\/>/;
+      const linkMatch = modifiedEntry.match(linkTagRegex);
+
+      if (linkMatch && linkMatch[1]) {
+          let hrefValue = linkMatch[1]; 
+
+          // Clean hrefValue temporarily for hostname extraction
+          let tempCleanedHref = hrefValue;
+          if (tempCleanedHref.startsWith(googleRedirectPrefixXML)) {
+              tempCleanedHref = tempCleanedHref.substring(googleRedirectPrefixXML.length);
+          }
+          const suffixMatchIndex = tempCleanedHref.indexOf('&amp;ct=ga&amp;cd');
+          if (suffixMatchIndex !== -1) {
+              tempCleanedHref = tempCleanedHref.substring(0, suffixMatchIndex);
+          }
+
+          const hostname = getHostname(tempCleanedHref);
+          const sourceNameTag = `<sourcename>${hostname}</sourcename>`;
+          
+          // Insert sourcenameTag after the full matched link tag linkMatch[0]
+          modifiedEntry = modifiedEntry.replace(linkMatch[0], linkMatch[0] + sourceNameTag);
+      }
+      return modifiedEntry;
+    });
     
+    // Step 2: Clean up Google redirect links and tracking parameters in the mergedFeedContentForUser HREFs
     mergedFeedContentForUser = mergedFeedContentForUser.replace(
       /(<link[^>]*?href=")([^"]*)(")/g,
       (match, g1OpeningTagAndHref, hrefValue, g3ClosingQuote) => {
         let newHrefValue = hrefValue;
 
-        // Step 1: Remove Google redirect prefix if present
         if (newHrefValue.startsWith(googleRedirectPrefixXML)) {
           newHrefValue = newHrefValue.substring(googleRedirectPrefixXML.length);
         }
 
-        // Step 2: Remove tracking suffix if present
         const suffixMatchIndex = newHrefValue.indexOf('&amp;ct=ga&amp;cd');
         if (suffixMatchIndex !== -1) {
           newHrefValue = newHrefValue.substring(0, suffixMatchIndex);

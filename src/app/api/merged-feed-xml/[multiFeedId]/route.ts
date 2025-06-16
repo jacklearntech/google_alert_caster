@@ -1,7 +1,27 @@
 
 import { type NextRequest, NextResponse } from 'next/server';
 
-const MULTI_FEED_SEPARATOR = '_|||_'; // Ensure this matches client-side definitions
+const MULTI_FEED_SEPARATOR = '_|||_'; 
+
+function getHostname(url: string): string {
+  try {
+    // Decode XML entities like &amp; before parsing with new URL()
+    const decodedUrl = url.replace(/&amp;/g, '&')
+                          .replace(/&lt;/g, '<')
+                          .replace(/&gt;/g, '>')
+                          .replace(/&quot;/g, '"')
+                          .replace(/&apos;/g, "'");
+    const parsedUrl = new URL(decodedUrl);
+    return parsedUrl.hostname;
+  } catch (e) {
+    // Fallback for potentially malformed URLs after cleaning
+    const domainMatch = url.match(/^(?:https?:\/\/)?(?:[^@\n]+@)?(?:www\.)?([^:\/\n?]+)/im);
+    if (domainMatch && domainMatch[1]) {
+        return domainMatch[1];
+    }
+    return 'unknown';
+  }
+}
 
 export async function GET(
   request: NextRequest,
@@ -14,20 +34,20 @@ export async function GET(
 
   let decodedMultiFeedId: string;
   try {
-    // Decode the entire multiFeedId first
     decodedMultiFeedId = decodeURIComponent(multiFeedId);
   } catch (e) {
     return NextResponse.json({ error: 'Invalid Multi-Feed ID encoding' }, { status: 400 });
   }
 
-  // Then split by the separator
   const urlsArray = decodedMultiFeedId.includes(MULTI_FEED_SEPARATOR)
     ? decodedMultiFeedId.split(MULTI_FEED_SEPARATOR)
-    : [decodedMultiFeedId]; // Though for "merged", it should always have the separator if multiple
+    : [decodedMultiFeedId]; 
 
   if (urlsArray.length === 0 || urlsArray.every(url => !url.trim())) {
     return NextResponse.json({ error: 'No feed URLs found in Multi-Feed ID' }, { status: 400 });
   }
+
+  const googleRedirectPrefixXML = 'https://www.google.com/url?rct=j&amp;sa=t&amp;url=';
 
   try {
     const fetchPromises = urlsArray.map(url =>
@@ -51,10 +71,9 @@ export async function GET(
       let baseXml = allFeedContents[0];
       const entriesToMerge: string[] = [];
 
-      // Extract <entry>...</entry> blocks from subsequent feeds
       for (let i = 1; i < allFeedContents.length; i++) {
         const subsequentFeedContent = allFeedContents[i];
-        const entryRegex = /<entry>[\s\S]*?<\/entry>/g; // Use non-greedy match
+        const entryRegex = /<entry>[\s\S]*?<\/entry>/g; 
         let match;
         while ((match = entryRegex.exec(subsequentFeedContent)) !== null) {
           entriesToMerge.push(match[0]);
@@ -62,7 +81,6 @@ export async function GET(
       }
 
       if (entriesToMerge.length > 0) {
-        // Find the closing </feed> tag in the base XML
         const feedCloseTagRegex = /<\/feed\s*>/i;
         const match = feedCloseTagRegex.exec(baseXml);
 
@@ -75,33 +93,55 @@ export async function GET(
             '\n' + 
             baseXml.substring(feedCloseTagIndex);
         } else {
-          // Fallback if </feed> tag is not found (shouldn't happen with valid Atom feeds)
           console.warn("Could not find closing </feed> tag in base XML for merging. Appending entries as a fallback.");
           mergedFeedContentForUser = baseXml + '\n' + entriesToMerge.join('\n');
         }
       } else {
-        mergedFeedContentForUser = baseXml; // Only one feed's content, or others had no entries
+        mergedFeedContentForUser = baseXml; 
       }
     } else if (allFeedContents.length === 1) {
       mergedFeedContentForUser = allFeedContents[0];
     } else {
       mergedFeedContentForUser = "<?xml version='1.0' encoding='UTF-8'?><feed xmlns='http://www.w3.org/2005/Atom'><title>Empty Feed</title></feed>";
     }
-
-    // Clean up Google redirect links and tracking parameters in the mergedFeedContentForUser
-    const googleRedirectPrefixWithAmp = 'https://www.google.com/url?rct=j&amp;sa=t&amp;url=';
     
+    // Step 1: Add <sourcename> to each entry
+    mergedFeedContentForUser = mergedFeedContentForUser.replace(/<entry>[\s\S]*?<\/entry>/g, (entryMatch) => {
+      let modifiedEntry = entryMatch;
+      const linkTagRegex = /<link[^>]*?href="([^"]*)"[^>]*?\/>/;
+      const linkMatch = modifiedEntry.match(linkTagRegex);
+
+      if (linkMatch && linkMatch[1]) {
+          let hrefValue = linkMatch[1]; 
+
+          // Clean hrefValue temporarily for hostname extraction
+          let tempCleanedHref = hrefValue;
+          if (tempCleanedHref.startsWith(googleRedirectPrefixXML)) {
+              tempCleanedHref = tempCleanedHref.substring(googleRedirectPrefixXML.length);
+          }
+          const suffixMatchIndex = tempCleanedHref.indexOf('&amp;ct=ga&amp;cd');
+          if (suffixMatchIndex !== -1) {
+              tempCleanedHref = tempCleanedHref.substring(0, suffixMatchIndex);
+          }
+
+          const hostname = getHostname(tempCleanedHref);
+          const sourceNameTag = `<sourcename>${hostname}</sourcename>`;
+          
+          modifiedEntry = modifiedEntry.replace(linkMatch[0], linkMatch[0] + sourceNameTag);
+      }
+      return modifiedEntry;
+    });
+
+    // Step 2: Clean up Google redirect links and tracking parameters in the mergedFeedContentForUser HREFs
     mergedFeedContentForUser = mergedFeedContentForUser.replace(
         /(<link[^>]*?href=")([^"]*)(")/g,
         (match, g1OpeningTagAndHref, hrefValue, g3ClosingQuote) => {
             let newHrefValue = hrefValue;
 
-            // Step 1: Remove Google redirect prefix if present
-            if (newHrefValue.startsWith(googleRedirectPrefixWithAmp)) {
-              newHrefValue = newHrefValue.substring(googleRedirectPrefixWithAmp.length);
+            if (newHrefValue.startsWith(googleRedirectPrefixXML)) {
+              newHrefValue = newHrefValue.substring(googleRedirectPrefixXML.length);
             }
     
-            // Step 2: Remove tracking suffix if present
             const suffixMatchIndex = newHrefValue.indexOf('&amp;ct=ga&amp;cd');
             if (suffixMatchIndex !== -1) {
               newHrefValue = newHrefValue.substring(0, suffixMatchIndex);
