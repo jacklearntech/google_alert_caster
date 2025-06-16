@@ -4,16 +4,14 @@
 import { summarizeRssFeed, type SummarizeRssFeedInput } from '@/ai/flows/summarize-rss-feed';
 
 export interface ProcessRssFeedResult {
-  mergedFeedContent: string; // Renamed from currentFeed, stores concatenated XMLs
+  mergedFeedContent: string; 
   summary: string;
   timestamp: number;
-  originalUrls: string[]; // Changed from originalUrl: string
+  originalUrls: string[]; 
 }
 
-const MULTI_FEED_XML_SEPARATOR = "\n\n<!-- FEED SEPARATOR -->\n\n";
-
 export async function processRssFeed(
-  feedUrls: string | string[], // Can be a single URL string or an array of URL strings
+  feedUrls: string | string[], 
   previousFeedContent?: string 
 ): Promise<ProcessRssFeedResult> {
   const urlsArray = Array.isArray(feedUrls) ? feedUrls : [feedUrls];
@@ -21,7 +19,7 @@ export async function processRssFeed(
 
   try {
     const fetchPromises = urlsArray.map(url => 
-      fetch(url, { cache: 'no-store' }) // Always fetch fresh
+      fetch(url, { cache: 'no-store' }) 
         .then(async response => {
           if (!response.ok) {
             let errorBody = '';
@@ -37,35 +35,71 @@ export async function processRssFeed(
 
     const allFeedContents = await Promise.all(fetchPromises);
     
-    let mergedFeedContentForUser = allFeedContents.join(MULTI_FEED_XML_SEPARATOR);
+    let mergedFeedContentForUser: string;
 
-    // Modify links in mergedFeedContentForUser to clean them up
+    if (allFeedContents.length > 1) {
+      let baseXml = allFeedContents[0];
+      const entriesToMerge: string[] = [];
+
+      for (let i = 1; i < allFeedContents.length; i++) {
+        const subsequentFeedContent = allFeedContents[i];
+        // Extract <entry>...</entry> blocks. Using [\s\S]*? for multiline content.
+        const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
+        let match;
+        while ((match = entryRegex.exec(subsequentFeedContent)) !== null) {
+          entriesToMerge.push(match[0]); // match[0] is the full <entry>...</entry>
+        }
+      }
+
+      if (entriesToMerge.length > 0) {
+        // Find the closing tag of the main feed element (e.g., </feed>)
+        // Google Alerts RSS uses <feed> as the root.
+        const feedCloseTagRegex = /<\/feed\s*>/i; // Case-insensitive, allows for optional space before >
+        const match = feedCloseTagRegex.exec(baseXml);
+
+        if (match) {
+          const feedCloseTagIndex = match.index;
+          mergedFeedContentForUser = 
+            baseXml.substring(0, feedCloseTagIndex) +
+            entriesToMerge.join('\n') + // Add a newline between merged entries for readability
+            '\n' + // Ensure newline before the closing tag
+            baseXml.substring(feedCloseTagIndex);
+        } else {
+          console.warn("Could not find closing </feed> tag in base XML for merging. Appending entries as a fallback.");
+          // Fallback: if </feed> not found, append to the end of the base XML.
+          mergedFeedContentForUser = baseXml + '\n' + entriesToMerge.join('\n');
+        }
+      } else {
+        // No entries found in subsequent feeds, use the base XML as is.
+        mergedFeedContentForUser = baseXml;
+      }
+    } else if (allFeedContents.length === 1) {
+      mergedFeedContentForUser = allFeedContents[0];
+    } else {
+      // No feeds fetched, result in empty string.
+      mergedFeedContentForUser = ""; 
+    }
+    
+    // Clean up links in the mergedFeedContentForUser (for display/download)
     // For links like <link>PREAMBLE&url=ACTUAL_URL...</link>, change to <link>ACTUAL_URL...</link>
     mergedFeedContentForUser = mergedFeedContentForUser.replace(/<link>([^<]+)<\/link>/g, (match, linkContent) => {
       const urlParamIndex = linkContent.indexOf('&url=');
       if (urlParamIndex !== -1) {
-        // Extract the part after "&url="
         const actualUrl = linkContent.substring(urlParamIndex + '&url='.length);
-        // Ensure the extracted URL starts with http, otherwise keep original to be safe
         if (actualUrl.startsWith('http')) {
-          // Reconstruct the link tag with the cleaned URL.
-          // Note: Google Alert URLs often have further parameters after the actual URL (e.g., &usg=...).
-          // The request is to "keep only the rest url link starting from https", implying these trailing params should be kept if they are part of the extracted URL.
           return `<link>${actualUrl}</link>`;
         }
       }
-      return match; // Return original if no '&url=' or if extracted part doesn't start with http
+      return match; 
     });
     
-    // For AI, also send the concatenated string of XMLs (original, unmodified links)
+    // For AI, send the simple concatenation of XMLs
     const feedContentForAI = allFeedContents.join("\n\n");
 
-
     const aiInput: SummarizeRssFeedInput = {
-      currentFeed: feedContentForAI, // AI gets the original concatenated content
+      currentFeed: feedContentForAI, 
     };
 
-    // Only provide previousFeed if it's a single feed and previous content exists
     if (isSingleFeed && previousFeedContent) {
       aiInput.previousFeed = previousFeedContent;
     }
@@ -73,7 +107,7 @@ export async function processRssFeed(
     const aiResult = await summarizeRssFeed(aiInput);
 
     return {
-      mergedFeedContent: mergedFeedContentForUser, // This is now the modified merged content
+      mergedFeedContent: mergedFeedContentForUser, 
       summary: aiResult.summary,
       timestamp: Date.now(),
       originalUrls: urlsArray,
@@ -86,4 +120,3 @@ export async function processRssFeed(
     throw new Error("An unknown error occurred while processing the RSS feed(s).");
   }
 }
-
