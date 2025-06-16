@@ -68,7 +68,7 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
         const cachedItem = localStorage.getItem(cacheKey);
         if (cachedItem) {
           const parsedCache: FeedCacheData = JSON.parse(cachedItem);
-          if (Date.now() - parsedCache.timestamp < CACHE_EXPIRY_MS) {
+          if (parsedCache.timestamp && (Date.now() - parsedCache.timestamp < CACHE_EXPIRY_MS)) {
             setFeedData(parsedCache);
             setIsLoading(false);
             return;
@@ -89,7 +89,7 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
         rawRss: result.mergedFeedContent,
         summary: result.summary,
         timestamp: result.timestamp,
-        originalUrls: result.originalUrls,
+        originalUrls: result.originalUrls || [], // Ensure originalUrls is always an array
       };
       setFeedData(newFeedCacheData);
       localStorage.setItem(cacheKey, JSON.stringify(newFeedCacheData));
@@ -112,14 +112,14 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
       setIsLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [decodedUrls, getCacheKey, toast, isMultiFeed]);
+  }, [decodedUrls, getCacheKey, toast, isMultiFeed]); // feedData removed from dep array to avoid potential loops if only its content changes
 
   useEffect(() => {
     if (decodedUrls.length > 0) {
       loadData();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [decodedUrls]); 
+  }, [decodedUrls]); // Removed loadData from dependency array as it's useCallback'd with its own dependencies
 
   const handleRefresh = () => {
     loadData(true);
@@ -129,8 +129,15 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
     if (!feedData?.rawRss) return;
     const blob = new Blob([feedData.rawRss], { type: 'application/xml;charset=utf-8' });
     const link = document.createElement('a');
-    const fileName = isMultiFeed ? 'merged_feeds' : (feedData.originalUrls[0].substring(feedData.originalUrls[0].lastIndexOf('/') + 1) || 'feed');
-    const safeFileName = fileName.replace(/[^a-z0-9_.-]/gi, '_').toLowerCase();
+    
+    let fileNamePart = 'feed';
+    if (isMultiFeed) {
+        fileNamePart = 'merged_feeds';
+    } else if (feedData.originalUrls && feedData.originalUrls.length > 0 && typeof feedData.originalUrls[0] === 'string' && feedData.originalUrls[0].trim() !== '') {
+        fileNamePart = feedData.originalUrls[0].substring(feedData.originalUrls[0].lastIndexOf('/') + 1) || 'feed';
+    }
+
+    const safeFileName = fileNamePart.replace(/[^a-z0-9_.-]/gi, '_').toLowerCase();
     link.href = URL.createObjectURL(blob);
     link.download = `${safeFileName}.xml`;
     document.body.appendChild(link);
@@ -193,10 +200,16 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
           <div className="flex items-center">
             {isMultiFeed ? <List className="mr-3 h-7 w-7 text-primary flex-shrink-0" /> : <Info className="mr-3 h-7 w-7 text-primary flex-shrink-0" /> }
             <CardTitle className="font-headline text-2xl">
-              {isMultiFeed ? `${feedData.originalUrls.length} Feed(s) Summary` : <span className="break-all">{feedData.originalUrls[0]}</span>}
+              {isMultiFeed
+                ? `${feedData.originalUrls?.length || 0} Feed(s) Summary`
+                : (feedData.originalUrls && feedData.originalUrls.length > 0 && feedData.originalUrls[0]
+                    ? <span className="break-all">{feedData.originalUrls[0]}</span>
+                    : <span className="break-all">Feed Details</span> 
+                  )
+              }
             </CardTitle>
           </div>
-          {isMultiFeed && feedData.originalUrls.length > 0 && (
+          {isMultiFeed && feedData.originalUrls && feedData.originalUrls.length > 0 && (
              <Accordion type="single" collapsible className="w-full pt-2">
               <AccordionItem value="item-1">
                 <AccordionTrigger className="text-sm text-muted-foreground hover:no-underline">View all {feedData.originalUrls.length} source URLs</AccordionTrigger>
@@ -205,7 +218,7 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
                     {feedData.originalUrls.map((url, index) => (
                       <li key={index} className="text-xs break-all">
                         <a href={url} target="_blank" rel="noopener noreferrer" className="hover:underline text-primary">
-                          {url}
+                          {url || `URL ${index + 1} not available`}
                         </a>
                       </li>
                     ))}
