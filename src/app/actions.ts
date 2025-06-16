@@ -43,57 +43,49 @@ export async function processRssFeed(
 
       for (let i = 1; i < allFeedContents.length; i++) {
         const subsequentFeedContent = allFeedContents[i];
-        // Extract <entry>...</entry> blocks. Using [\s\S]*? for multiline content.
         const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
         let match;
         while ((match = entryRegex.exec(subsequentFeedContent)) !== null) {
-          entriesToMerge.push(match[0]); // match[0] is the full <entry>...</entry>
+          entriesToMerge.push(match[0]); 
         }
       }
 
       if (entriesToMerge.length > 0) {
-        // Find the closing tag of the main feed element (e.g., </feed>)
-        // Google Alerts RSS uses <feed> as the root.
-        const feedCloseTagRegex = /<\/feed\s*>/i; // Case-insensitive, allows for optional space before >
+        const feedCloseTagRegex = /<\/feed\s*>/i; 
         const match = feedCloseTagRegex.exec(baseXml);
 
         if (match) {
           const feedCloseTagIndex = match.index;
           mergedFeedContentForUser = 
             baseXml.substring(0, feedCloseTagIndex) +
-            entriesToMerge.join('\n') + // Add a newline between merged entries for readability
-            '\n' + // Ensure newline before the closing tag
+            entriesToMerge.join('\n') + 
+            '\n' + 
             baseXml.substring(feedCloseTagIndex);
         } else {
           console.warn("Could not find closing </feed> tag in base XML for merging. Appending entries as a fallback.");
-          // Fallback: if </feed> not found, append to the end of the base XML.
           mergedFeedContentForUser = baseXml + '\n' + entriesToMerge.join('\n');
         }
       } else {
-        // No entries found in subsequent feeds, use the base XML as is.
         mergedFeedContentForUser = baseXml;
       }
     } else if (allFeedContents.length === 1) {
       mergedFeedContentForUser = allFeedContents[0];
     } else {
-      // No feeds fetched, result in empty string.
       mergedFeedContentForUser = ""; 
     }
     
-    // Clean up links in the mergedFeedContentForUser (for display/download)
-    // For links like <link>PREAMBLE&url=ACTUAL_URL...</link>, change to <link>ACTUAL_URL...</link>
+    // Clean up Google redirect links in the mergedFeedContentForUser (for display/download)
+    // Specifically targets <link>CONTENT</link> tags.
     mergedFeedContentForUser = mergedFeedContentForUser.replace(/<link>([^<]+)<\/link>/g, (match, linkContent) => {
-      const urlParamIndex = linkContent.indexOf('&url=');
-      if (urlParamIndex !== -1) {
-        const actualUrl = linkContent.substring(urlParamIndex + '&url='.length);
-        if (actualUrl.startsWith('http')) {
-          return `<link>${actualUrl}</link>`;
-        }
+      const googleRedirectPrefix = 'https://www.google.com/url?rct=j&amp;sa=t&amp;url=';
+      if (linkContent.startsWith(googleRedirectPrefix)) {
+        const actualUrl = linkContent.substring(googleRedirectPrefix.length);
+        return `<link>${actualUrl}</link>`;
       }
+      // If the link does not start with the specific Google redirect prefix, return it unchanged.
       return match; 
     });
     
-    // For AI, send the simple concatenation of XMLs
     const feedContentForAI = allFeedContents.join("\n\n");
 
     const aiInput: SummarizeRssFeedInput = {
@@ -120,3 +112,4 @@ export async function processRssFeed(
     throw new Error("An unknown error occurred while processing the RSS feed(s).");
   }
 }
+
