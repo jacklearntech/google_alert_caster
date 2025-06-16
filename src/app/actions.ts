@@ -1,43 +1,70 @@
+
 "use server";
 
 import { summarizeRssFeed, type SummarizeRssFeedInput } from '@/ai/flows/summarize-rss-feed';
 
 export interface ProcessRssFeedResult {
-  currentFeed: string;
+  mergedFeedContent: string; // Renamed from currentFeed, stores concatenated XMLs
   summary: string;
   timestamp: number;
-  originalUrl: string;
+  originalUrls: string[]; // Changed from originalUrl: string
 }
 
-export async function processRssFeed(feedUrl: string, previousFeedContent?: string): Promise<ProcessRssFeedResult> {
+const MULTI_FEED_XML_SEPARATOR = "\n\n<!-- FEED SEPARATOR -->\n\n";
+
+export async function processRssFeed(
+  feedUrls: string | string[], // Can be a single URL string or an array of URL strings
+  previousFeedContent?: string 
+): Promise<ProcessRssFeedResult> {
+  const urlsArray = Array.isArray(feedUrls) ? feedUrls : [feedUrls];
+  const isSingleFeed = urlsArray.length === 1;
+
   try {
-    const response = await fetch(feedUrl, { cache: 'no-store' }); // Always fetch fresh
-    if (!response.ok) {
-      throw new Error(`Failed to fetch RSS feed: ${response.statusText}`);
-    }
-    const currentFeed = await response.text();
+    const fetchPromises = urlsArray.map(url => 
+      fetch(url, { cache: 'no-store' }) // Always fetch fresh
+        .then(async response => {
+          if (!response.ok) {
+            let errorBody = '';
+            try {
+              errorBody = await response.text();
+            } catch (parseError) { /* Ignore */ }
+            const errorMessage = errorBody ? errorBody.substring(0, 200) : response.statusText;
+            throw new Error(`Failed to fetch ${url}: ${response.status} ${errorMessage}`);
+          }
+          return response.text();
+        })
+    );
+
+    const allFeedContents = await Promise.all(fetchPromises);
+    
+    // For rawRss to be downloaded/viewed, concatenate all XMLs separated by a comment
+    const mergedFeedContentForUser = allFeedContents.join(MULTI_FEED_XML_SEPARATOR);
+    // For AI, also send the concatenated string of XMLs
+    const feedContentForAI = allFeedContents.join("\n\n");
+
 
     const aiInput: SummarizeRssFeedInput = {
-      currentFeed,
+      currentFeed: feedContentForAI, // AI gets the concatenated content
     };
-    if (previousFeedContent) {
+
+    // Only provide previousFeed if it's a single feed and previous content exists
+    if (isSingleFeed && previousFeedContent) {
       aiInput.previousFeed = previousFeedContent;
     }
 
     const aiResult = await summarizeRssFeed(aiInput);
 
     return {
-      currentFeed,
+      mergedFeedContent: mergedFeedContentForUser,
       summary: aiResult.summary,
       timestamp: Date.now(),
-      originalUrl: feedUrl,
+      originalUrls: urlsArray,
     };
   } catch (error) {
-    console.error("Error processing RSS feed:", error);
-    // Rethrow a more generic error or a specific error object
+    console.error("Error processing RSS feed(s):", error);
     if (error instanceof Error) {
-        throw new Error(`Could not process RSS feed: ${error.message}`);
+        throw new Error(`Could not process RSS feed(s): ${error.message}`);
     }
-    throw new Error("An unknown error occurred while processing the RSS feed.");
+    throw new Error("An unknown error occurred while processing the RSS feed(s).");
   }
 }

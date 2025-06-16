@@ -1,6 +1,7 @@
+
 export interface FeedCacheData {
-  rawRss: string;
+  rawRss: string; // For multiple feeds, this will be concatenated XMLs
   summary: string;
   timestamp: number;
-  originalUrl: string;
+  originalUrls: string[]; // Changed from originalUrl: string
 }
