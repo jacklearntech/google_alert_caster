@@ -20,7 +20,7 @@ interface FeedDetailClientProps {
 
 const FEED_CACHE_PREFIX = 'rss_cache_';
 const CACHE_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
-const MULTI_FEED_SEPARATOR = '_|||_'; // Must match RssInputClient
+const MULTI_FEED_SEPARATOR = '_|||_'; // Must match RssInputClient and new API route
 
 export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
   const [feedData, setFeedData] = useState<FeedCacheData | null>(null);
@@ -139,26 +139,6 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
     URL.revokeObjectURL(link.href);
   };
 
-  const handleViewMergedXml = () => {
-    if (!feedData?.rawRss) return;
-    const blob = new Blob([feedData.rawRss], { type: 'application/xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const newWindow = window.open(url, '_blank');
-    if (newWindow) {
-      // Revoke the object URL after a short delay to ensure the new tab has loaded it.
-      // onload event on the new window is not always reliable, especially for blob URLs.
-      setTimeout(() => URL.revokeObjectURL(url), 100); 
-    } else {
-      toast({
-        title: "Info",
-        description: "Could not open new tab. Please check your browser's pop-up blocker settings.",
-        variant: "default"
-      });
-      URL.revokeObjectURL(url);
-    }
-  };
-
-
   if (isLoading && !feedData) { 
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
@@ -252,10 +232,20 @@ export default function FeedDetailClient({ feedId }: FeedDetailClientProps) {
             Download {isMultiFeed ? "Merged XML Source" : "Cached XML"}
           </Button>
           {isMultiFeed && (
-            <Button onClick={handleViewMergedXml} variant="outline" disabled={!feedData.rawRss || isLoading} className="w-full sm:w-auto">
+            <Link
+              href={`/api/merged-feed-xml/${feedId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn(
+                buttonVariants({ variant: "outline" }),
+                "w-full sm:w-auto",
+                (!feedData.rawRss || isLoading) && "opacity-50 cursor-not-allowed pointer-events-none"
+              )}
+              aria-disabled={!feedData.rawRss || isLoading}
+            >
               <ExternalLink className="mr-2 h-4 w-4" />
               View Merged XML
-            </Button>
+            </Link>
           )}
           {!isMultiFeed && ( 
             <Link
