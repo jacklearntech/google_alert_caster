@@ -80,7 +80,7 @@ export async function processRssFeed(
 
     // Clean up Google redirect links in the mergedFeedContentForUser (for display/download)
     // Targets href attributes of <link> tags.
-    const googleRedirectPrefixToReplace = 'https://www.google.com/url?rct=j&amp;sa=t&amp;url=';
+    const googleRedirectPrefixToReplace = 'https://www.google.com/url?rct=j&sa=t&url=';
     
     mergedFeedContentForUser = mergedFeedContentForUser.replace(
       // Regex to capture:
